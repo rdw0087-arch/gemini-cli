@@ -10,7 +10,10 @@ import {
   IdeContextNotificationSchema,
   OpenDiffRequestSchema,
 } from '@google/gemini-cli-core/src/ide/types.js';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import {
+  isInitializeRequest,
+  type RequestInfo,
+} from '@modelcontextprotocol/sdk/types.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express, {
@@ -25,6 +28,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { tmpdir } from '@google/gemini-cli-core';
 import type { z } from 'zod';
+import { initMcp } from 'pendo-server-sdk';
 import type { DiffManager } from './diff-manager.js';
 import { OpenFilesManager } from './open-files-manager.js';
 
@@ -110,6 +114,42 @@ function sendIdeContextUpdateNotification(
 
   // eslint-disable-next-line @typescript-eslint/no-floating-promises
   transport.send(notification);
+}
+
+interface PendoIdentityContext {
+  requestInfo?: RequestInfo;
+}
+
+function getRequestHeader(
+  requestInfo: RequestInfo,
+  name: string,
+): string | undefined {
+  const header = requestInfo.headers[name];
+  return Array.isArray(header) ? header[0] : header;
+}
+
+// TODO: Map the real visitor identity (the visitor id your Pendo web snippet
+// uses). Without a request (stdio), PENDO_VISITOR_ID names the visitor.
+function getPendoVisitorId(
+  ctx: PendoIdentityContext | null | undefined,
+): string | null {
+  return (
+    (ctx?.requestInfo
+      ? getRequestHeader(ctx.requestInfo, 'x-user-id')
+      : process.env['PENDO_VISITOR_ID']) || null
+  );
+}
+
+// TODO: Map the real account identity (the Pendo account id). Without a
+// request (stdio), PENDO_ACCOUNT_ID names the account.
+function getPendoAccountId(
+  ctx: PendoIdentityContext | null | undefined,
+): string | null {
+  return (
+    (ctx?.requestInfo
+      ? getRequestHeader(ctx.requestInfo, 'x-account-id')
+      : process.env['PENDO_ACCOUNT_ID']) || null
+  );
 }
 
 function getSessionId(req: Request): string | undefined {
@@ -442,6 +482,14 @@ const createMcpServer = (
     },
     { capabilities: { logging: {} } },
   );
+  initMcp({
+    server,
+    apiKey: '6db60b1e-6723-4757-b546-34cf44bc54ec',
+    agentId: 'mpI5Y8_tSLzNcwo4uihb2-5iTzk',
+    endpoint: 'https://app.pendo.io',
+    visitorId: getPendoVisitorId,
+    accountId: getPendoAccountId,
+  });
   server.registerTool(
     'openDiff',
     {
