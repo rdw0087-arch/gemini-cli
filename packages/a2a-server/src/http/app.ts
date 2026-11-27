@@ -17,6 +17,7 @@ import {
 } from '@a2a-js/sdk/server';
 import { A2AExpressApp, type UserBuilder } from '@a2a-js/sdk/server/express'; // Import server components
 import { v4 as uuidv4 } from 'uuid';
+import * as pendo from 'pendo-server-sdk';
 import { logger } from '../utils/logger.js';
 import type { AgentSettings } from '../types.js';
 import { GCSTaskStore, NoOpTaskStore } from '../persistence/gcs.js';
@@ -121,6 +122,46 @@ const customUserBuilder: UserBuilder = async (req: Request) => {
 
   return new UnauthenticatedUser();
 };
+
+function getHeader(req: Request, name: string): string | undefined {
+  const header = req.headers[name];
+  return Array.isArray(header) ? header[0] : header;
+}
+
+/** The A2A conversation id: the contextId of a message/send or message/stream request. */
+function getA2AContextId(body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null || !('params' in body)) {
+    return undefined;
+  }
+  const { params } = body;
+  if (typeof params !== 'object' || params === null || !('message' in params)) {
+    return undefined;
+  }
+  const { message } = params;
+  if (
+    typeof message !== 'object' ||
+    message === null ||
+    !('contextId' in message)
+  ) {
+    return undefined;
+  }
+  const { contextId } = message;
+  return typeof contextId === 'string' && contextId.trim()
+    ? contextId
+    : undefined;
+}
+
+/** Names the Pendo visitor, account, and conversation of each A2A turn. */
+const pendoIdentity = pendo.middleware((req: Request) => ({
+  // TODO: Map the real visitor identity (the visitor id your Pendo web snippet
+  // uses). The visitor is recorded as anonymous until it is set.
+  visitorId: getHeader(req, 'x-user-id'),
+  // TODO: Map the real account identity (the Pendo account id).
+  accountId: getHeader(req, 'x-account-id'),
+  // A message that starts a new conversation carries no contextId: the A2A
+  // request handler assigns one after this middleware runs.
+  conversationId: getA2AContextId(req.body),
+}));
 
 async function handleExecuteCommand(
   req: express.Request,
@@ -257,7 +298,9 @@ export async function createApp() {
     });
 
     const appBuilder = new A2AExpressApp(requestHandler, customUserBuilder);
-    expressApp = appBuilder.setupRoutes(expressApp, '');
+    // The A2A router parses the JSON body before its middlewares run, so the
+    // Pendo middleware can read the message's contextId.
+    expressApp = appBuilder.setupRoutes(expressApp, '', [pendoIdentity]);
     expressApp.use(express.json());
 
     expressApp.post('/tasks', async (req, res) => {

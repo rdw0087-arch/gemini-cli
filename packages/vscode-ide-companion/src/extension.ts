@@ -5,6 +5,7 @@
  */
 
 import * as vscode from 'vscode';
+import { flush } from 'pendo-server-sdk';
 import { IDEServer } from './ide-server.js';
 import semver from 'semver';
 import { DiffContentProvider, DiffManager } from './diff-manager.js';
@@ -31,6 +32,17 @@ let ideServer: IDEServer;
 let logger: vscode.OutputChannel;
 
 let log: (message: string) => void = () => {};
+
+/**
+ * Sends buffered Pendo events before the process stops on SIGINT or SIGTERM.
+ * The handler runs once, then raises the signal again so the process stops as
+ * it would have without it.
+ */
+function flushPendoOnSignal(signal: NodeJS.Signals) {
+  void flush().finally(() => {
+    process.kill(process.pid, signal);
+  });
+}
 
 async function checkForUpdates(
   context: vscode.ExtensionContext,
@@ -155,6 +167,15 @@ export async function activate(context: vscode.ExtensionContext) {
     )),
   );
 
+  process.once('SIGINT', flushPendoOnSignal);
+  process.once('SIGTERM', flushPendoOnSignal);
+  context.subscriptions.push({
+    dispose: () => {
+      process.removeListener('SIGINT', flushPendoOnSignal);
+      process.removeListener('SIGTERM', flushPendoOnSignal);
+    },
+  });
+
   ideServer = new IDEServer(log, diffManager);
   try {
     await ideServer.start(context);
@@ -230,6 +251,8 @@ export async function deactivate(): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     log(`Failed to stop IDE server during deactivation: ${message}`);
   } finally {
+    // Send the Pendo events still buffered once the IDE server has stopped.
+    await flush();
     if (logger) {
       logger.dispose();
     }

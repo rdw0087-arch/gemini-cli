@@ -19,6 +19,7 @@ import {
   type Config,
 } from '@google/gemini-cli-core';
 import { v4 as uuidv4 } from 'uuid';
+import * as pendo from 'pendo-server-sdk';
 
 import { logger } from '../utils/logger.js';
 import {
@@ -656,6 +657,9 @@ export class CoderAgentExecutor implements AgentExecutor {
           this.tasks.delete(taskId);
         }
       }
+      // Sends this turn's Pendo prompt and response events for the
+      // conversation the request's contextId names.
+      pendo.closeTurn(contextId);
     }
   }
 }
